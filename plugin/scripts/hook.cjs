@@ -3,7 +3,7 @@
 
 // src/constants.ts
 var PLUGIN_NAME = "claude-membase";
-var PLUGIN_VERSION = "0.1.0-alpha.0";
+var PLUGIN_VERSION = "0.1.0";
 var DEFAULT_API_URL = "https://api.membase.so";
 var MEMORY_SOURCE = "claude-code";
 var USER_AGENT = `membase-claude-code/${PLUGIN_VERSION}`;
