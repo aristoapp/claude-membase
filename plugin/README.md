@@ -74,7 +74,8 @@ plugin does not keep a separate local memory database.
 
 Auto-capture is off until the user enables it during `/membase:login`. The
 supported capture mode is summary-centered: it stores bounded tool summaries and
-Claude-provided compact summaries, not raw transcript tails.
+Claude-provided compact summaries, not raw transcript tails. Turning
+auto-capture off does not disable explicit saves through memory or wiki tools.
 
 The plugin avoids saving secrets, `.env` values, private keys, raw source files,
 long terminal output, system/tool-routing instructions, and content wrapped in

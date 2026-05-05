@@ -149,7 +149,7 @@ async function main(): Promise<void> {
         "Start OAuth login for Membase and save local Claude Code plugin credentials. Ask the user whether summary auto-capture should be enabled before calling this tool.",
       inputSchema: {
         capture_mode: CaptureModeSchema.describe(
-          "Use summary only after explicit user consent. Use off if the user declines auto-capture.",
+          "Use summary only after explicit user consent. Use off to disable automatic summary capture; explicit memory and wiki saves still work.",
         ),
       },
       annotations: {
