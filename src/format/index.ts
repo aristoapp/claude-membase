@@ -1,6 +1,12 @@
 import type { EpisodeBundle, WikiDocument } from "../types.js";
 import { truncateText } from "../sanitize/index.js";
 
+export interface RecallMemoryGroup {
+  title: string;
+  memories: EpisodeBundle[];
+  capped?: boolean;
+}
+
 export function formatBundle(bundle: EpisodeBundle, index: number): string {
   const episode = bundle.episode;
   const score =
@@ -24,6 +30,35 @@ export function formatBundle(bundle: EpisodeBundle, index: number): string {
     .join("\n");
 }
 
+export function formatMemorySearchResults(
+  bundles: EpisodeBundle[],
+  options: {
+    limit?: number;
+    offset?: number;
+    hasMore?: boolean;
+  } = {},
+): string {
+  if (bundles.length === 0) return "No memories found.";
+
+  const shouldHint =
+    options.hasMore ??
+    (options.limit !== undefined && bundles.length >= options.limit);
+  const nextOffset =
+    options.limit !== undefined
+      ? (options.offset ?? 0) + options.limit
+      : undefined;
+  const paginationHint =
+    nextOffset !== undefined ? `use offset=${nextOffset} to paginate or ` : "";
+  const limitHint = shouldHint
+    ? ` (limit reached; more memories may exist; ${paginationHint}search with a different query)`
+    : "";
+  const header = `Found ${bundles.length} ${
+    bundles.length === 1 ? "memory" : "memories"
+  }${limitHint}:`;
+
+  return `${header}\n${bundles.map(formatBundle).join("\n\n")}`;
+}
+
 export function formatWikiDocument(doc: WikiDocument, index: number): string {
   const score =
     typeof doc.similarity === "number"
@@ -40,7 +75,7 @@ export function formatWikiDocument(doc: WikiDocument, index: number): string {
 }
 
 export function buildRecallContext(
-  memories: EpisodeBundle[],
+  memoryGroups: RecallMemoryGroup[],
   wikiDocs: WikiDocument[],
   maxChars: number,
 ): string {
@@ -49,11 +84,16 @@ export function buildRecallContext(
   const disclaimer =
     "This pre-fetch may be incomplete. For timelines, date ranges, or comprehensive recall, use the Membase MCP tools directly.";
   const sections: string[] = [];
-  if (memories.length > 0) {
+  for (const group of memoryGroups) {
+    if (group.memories.length === 0) continue;
+    const capped = group.capped ? ", prefetch limit reached" : "";
+    const cappedNote = group.capped
+      ? "\n\n   Note: this pre-fetch reached its limit. Use search_memory for deeper recall or pagination."
+      : "";
     sections.push(
-      `Memories (${memories.length}):\n${memories
+      `${group.title} (${group.memories.length}${capped}):\n${group.memories
         .map(formatBundle)
-        .join("\n\n")}`,
+        .join("\n\n")}${cappedNote}`,
     );
   }
   if (wikiDocs.length > 0) {

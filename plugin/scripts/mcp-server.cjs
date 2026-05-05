@@ -31550,6 +31550,16 @@ function formatBundle(bundle, index) {
   return [header, summary, facts ? `   related facts:
 ${facts}` : ""].filter(Boolean).join("\n");
 }
+function formatMemorySearchResults(bundles, options = {}) {
+  if (bundles.length === 0) return "No memories found.";
+  const shouldHint = options.hasMore ?? (options.limit !== void 0 && bundles.length >= options.limit);
+  const nextOffset = options.limit !== void 0 ? (options.offset ?? 0) + options.limit : void 0;
+  const paginationHint = nextOffset !== void 0 ? `use offset=${nextOffset} to paginate or ` : "";
+  const limitHint = shouldHint ? ` (limit reached; more memories may exist; ${paginationHint}search with a different query)` : "";
+  const header = `Found ${bundles.length} ${bundles.length === 1 ? "memory" : "memories"}${limitHint}:`;
+  return `${header}
+${bundles.map(formatBundle).join("\n\n")}`;
+}
 function formatWikiDocument(doc, index) {
   const score = typeof doc.similarity === "number" ? ` score=${doc.similarity.toFixed(3)}` : "";
   const collection = doc.collection_name ? ` collection=${doc.collection_name}` : "";
@@ -31901,10 +31911,22 @@ async function main() {
     async (args) => {
       const { client } = requireClient();
       const project = args.project || void 0;
-      const bundles = await client.searchMemory({ ...args, project });
+      const requestedLimit = args.limit ?? 20;
+      const probeLimit = requestedLimit < 30 ? requestedLimit + 1 : requestedLimit;
+      const bundles = await client.searchMemory({
+        ...args,
+        limit: probeLimit,
+        project
+      });
       await client.recordUsage().catch(() => void 0);
-      if (bundles.length === 0) return success2("No memories found.");
-      return success2(bundles.map(formatBundle).join("\n\n"));
+      const displayedBundles = bundles.slice(0, requestedLimit);
+      return success2(
+        formatMemorySearchResults(displayedBundles, {
+          limit: requestedLimit,
+          offset: args.offset ?? 0,
+          hasMore: bundles.length > requestedLimit || probeLimit === requestedLimit && bundles.length >= requestedLimit
+        })
+      );
     }
   );
   server.registerTool(

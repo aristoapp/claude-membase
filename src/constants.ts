@@ -9,4 +9,6 @@ export const DEFAULT_MAX_RECALL_CHARS = 4_000;
 export const MAX_RECALL_CHARS = 16_000;
 export const MIN_RECALL_CHARS = 500;
 export const PREFETCH_MEMORY_LIMIT = 10;
+export const PREFETCH_PROJECT_MEMORY_LIMIT = 7;
+export const PREFETCH_BROADER_MEMORY_LIMIT = 4;
 export const PREFETCH_WIKI_LIMIT = 5;

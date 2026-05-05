@@ -1,13 +1,17 @@
 import { createClient } from "../api/client.js";
+import type { MembaseClient } from "../api/client.js";
 import { loadConfig, readTokens, writeTokens } from "../config/index.js";
 import {
   DEFAULT_RECALL_TIMEOUT_MS,
+  PREFETCH_BROADER_MEMORY_LIMIT,
   PREFETCH_MEMORY_LIMIT,
+  PREFETCH_PROJECT_MEMORY_LIMIT,
   PREFETCH_WIKI_LIMIT,
   PLUGIN_NAME,
   PLUGIN_VERSION,
 } from "../constants.js";
 import { buildRecallContext } from "../format/index.js";
+import type { RecallMemoryGroup } from "../format/index.js";
 import { resolveProjectSlug } from "../project/index.js";
 import {
   isCasualChat,
@@ -20,6 +24,7 @@ import { enqueueCapture, flushSpool } from "../spool/index.js";
 import type { HookInput } from "../types.js";
 import { buildSessionStartContext } from "./session-start.js";
 import { buildSessionCaptureCandidate, summarizeToolCall } from "./summary.js";
+import type { EpisodeBundle } from "../types.js";
 
 const SESSION_FETCH_TIMEOUT_MS = 1_800;
 const ASYNC_FLUSH_TIMEOUT_MS = 4_000;
@@ -80,6 +85,61 @@ function captureMetadata(input: HookInput, projectSlug?: string) {
   };
 }
 
+interface RawRecallMemoryGroup {
+  title: string;
+  limit: number;
+  bundles: EpisodeBundle[];
+}
+
+function memoryKey(bundle: EpisodeBundle): string {
+  return (
+    bundle.episode.uuid ||
+    bundle.episode.name ||
+    bundle.episode.summary ||
+    JSON.stringify(bundle.episode)
+  );
+}
+
+function selectRecallMemoryGroup(
+  group: RawRecallMemoryGroup,
+  seen: Set<string>,
+): RecallMemoryGroup {
+  const memories: EpisodeBundle[] = [];
+  for (const bundle of group.bundles) {
+    const key = memoryKey(bundle);
+    if (seen.has(key)) continue;
+    if (memories.length >= group.limit) continue;
+    seen.add(key);
+    memories.push(bundle);
+  }
+  return {
+    title: group.title,
+    memories,
+    capped: group.bundles.length > group.limit,
+  };
+}
+
+async function fetchRecallMemoryGroup(
+  client: MembaseClient,
+  args: {
+    title: string;
+    query: string;
+    limit: number;
+    project?: string;
+  },
+): Promise<RawRecallMemoryGroup> {
+  const bundles = await client.searchMemory({
+    query: args.query,
+    limit: args.limit + 1,
+    project: args.project,
+  });
+  return {
+    title: args.title,
+    limit: args.limit,
+    bundles,
+  };
+}
+
 async function handleSessionStart(input: HookInput): Promise<void> {
   const config = loadConfig();
   const tokens = readTokens();
@@ -127,26 +187,51 @@ async function handleUserPromptSubmit(input: HookInput): Promise<void> {
     timeoutMs: DEFAULT_RECALL_TIMEOUT_MS,
   });
   const project = resolveProjectSlug(input.cwd, config);
-  const [memoryResult, wikiResult] = await Promise.allSettled([
+  const memoryFetches = [
+    ...(project
+      ? [
+          withTimeout(
+            fetchRecallMemoryGroup(client, {
+              title: `Project memories (project=${project})`,
+              query: prompt,
+              limit: PREFETCH_PROJECT_MEMORY_LIMIT,
+              project,
+            }),
+            DEFAULT_RECALL_TIMEOUT_MS,
+          ),
+        ]
+      : []),
     withTimeout(
-      client.searchMemory({
+      fetchRecallMemoryGroup(client, {
+        title: project ? "Broader memories (unscoped search)" : "Memories",
         query: prompt,
-        limit: PREFETCH_MEMORY_LIMIT,
-        project,
+        limit: project ? PREFETCH_BROADER_MEMORY_LIMIT : PREFETCH_MEMORY_LIMIT,
       }),
       DEFAULT_RECALL_TIMEOUT_MS,
     ),
+  ];
+  const [memoryResults, wikiResult] = await Promise.all([
+    Promise.allSettled(memoryFetches),
     config.autoWikiRecall
       ? withTimeout(
           client.searchWiki({ query: prompt, limit: PREFETCH_WIKI_LIMIT }),
           DEFAULT_RECALL_TIMEOUT_MS,
-        )
+        ).catch(() => [])
       : Promise.resolve([]),
   ]);
-  const memories =
-    memoryResult.status === "fulfilled" ? memoryResult.value : [];
-  const wikiDocs = wikiResult.status === "fulfilled" ? wikiResult.value : [];
-  const context = buildRecallContext(memories, wikiDocs, config.maxRecallChars);
+  const seen = new Set<string>();
+  const memoryGroups = memoryResults
+    .filter(
+      (result): result is PromiseFulfilledResult<RawRecallMemoryGroup> =>
+        result.status === "fulfilled",
+    )
+    .map((result) => selectRecallMemoryGroup(result.value, seen))
+    .filter((group) => group.memories.length > 0);
+  const context = buildRecallContext(
+    memoryGroups,
+    wikiResult,
+    config.maxRecallChars,
+  );
   outputAdditionalContext(context);
 }
 

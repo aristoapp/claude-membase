@@ -19,7 +19,10 @@ import {
   MEMORY_SOURCE,
   PLUGIN_VERSION,
 } from "../constants.js";
-import { formatBundle, formatWikiDocument } from "../format/index.js";
+import {
+  formatMemorySearchResults,
+  formatWikiDocument,
+} from "../format/index.js";
 import {
   accountProfileFields,
   profileResourceFields,
@@ -342,10 +345,25 @@ async function main(): Promise<void> {
     async (args) => {
       const { client } = requireClient();
       const project = args.project || undefined;
-      const bundles = await client.searchMemory({ ...args, project });
+      const requestedLimit = args.limit ?? 20;
+      const probeLimit =
+        requestedLimit < 30 ? requestedLimit + 1 : requestedLimit;
+      const bundles = await client.searchMemory({
+        ...args,
+        limit: probeLimit,
+        project,
+      });
       await client.recordUsage().catch(() => undefined);
-      if (bundles.length === 0) return success("No memories found.");
-      return success(bundles.map(formatBundle).join("\n\n"));
+      const displayedBundles = bundles.slice(0, requestedLimit);
+      return success(
+        formatMemorySearchResults(displayedBundles, {
+          limit: requestedLimit,
+          offset: args.offset ?? 0,
+          hasMore:
+            bundles.length > requestedLimit ||
+            (probeLimit === requestedLimit && bundles.length >= requestedLimit),
+        }),
+      );
     },
   );
 
