@@ -30,13 +30,6 @@ const MEMORY_KEYWORDS = [
   "bug",
   "issue",
   "error",
-  "기억",
-  "저장",
-  "결정",
-  "프로젝트",
-  "선호",
-  "버그",
-  "배포",
 ];
 
 const MEMBASE_CONTEXT_BLOCK_RE =

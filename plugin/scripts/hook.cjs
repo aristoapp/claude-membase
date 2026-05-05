@@ -3,7 +3,7 @@
 
 // src/constants.ts
 var PLUGIN_NAME = "claude-membase";
-var PLUGIN_VERSION = "0.1.0";
+var PLUGIN_VERSION = "0.1.1";
 var DEFAULT_API_URL = "https://api.membase.so";
 var MEMORY_SOURCE = "claude-code";
 var USER_AGENT = `membase-claude-code/${PLUGIN_VERSION}`;
@@ -363,14 +363,7 @@ var MEMORY_KEYWORDS = [
   "deadline",
   "bug",
   "issue",
-  "error",
-  "\uAE30\uC5B5",
-  "\uC800\uC7A5",
-  "\uACB0\uC815",
-  "\uD504\uB85C\uC81D\uD2B8",
-  "\uC120\uD638",
-  "\uBC84\uADF8",
-  "\uBC30\uD3EC"
+  "error"
 ];
 var MEMBASE_CONTEXT_BLOCK_RE = /<membase-context>[\s\S]*?<\/membase-context>\s*/gi;
 var PRIVATE_BLOCK_RE = /<(private|membase-private)>[\s\S]*?<\/\1>\s*/gi;
