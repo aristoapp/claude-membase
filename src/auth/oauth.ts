@@ -22,18 +22,19 @@ function spawnDetached(command: string, args: string[]): void {
   child.unref();
 }
 
+export function browserLaunchCommand(
+  url: string,
+  platform: NodeJS.Platform = process.platform,
+): { command: string; args: string[] } {
+  if (platform === "darwin") return { command: "open", args: [url] };
+  if (platform === "win32") return { command: "explorer.exe", args: [url] };
+  return { command: "xdg-open", args: [url] };
+}
+
 function openBrowser(url: string): void {
-  const platform = process.platform;
   try {
-    if (platform === "darwin") {
-      spawnDetached("open", [url]);
-      return;
-    }
-    if (platform === "win32") {
-      spawnDetached("cmd", ["/c", "start", "", url]);
-      return;
-    }
-    spawnDetached("xdg-open", [url]);
+    const launch = browserLaunchCommand(url);
+    spawnDetached(launch.command, launch.args);
   } catch {}
 }
 

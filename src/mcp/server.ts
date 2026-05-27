@@ -29,6 +29,11 @@ import {
 } from "../profile/index.js";
 import { resolveProjectSlug } from "../project/index.js";
 import { looksSensitive, truncateText } from "../sanitize/index.js";
+import {
+  consumeUpdateNotice,
+  startBackgroundUpdateCheck,
+  toolResponse,
+} from "../update-check.js";
 
 const MemoryContentSchema = z.string().min(1).max(50_000);
 const MemoryProjectSchema = z.string().max(60).optional();
@@ -48,7 +53,17 @@ function requireClient() {
   };
 }
 
-function success(text: string) {
+async function success(text: string) {
+  return toolResponse(text);
+}
+
+async function jsonSuccess(payload: Record<string, unknown>) {
+  const notice = await consumeUpdateNotice().catch(() => null);
+  const text = JSON.stringify(
+    notice ? { ...payload, update_notice: notice } : payload,
+    null,
+    2,
+  );
   return { content: [{ type: "text" as const, text }] };
 }
 
@@ -124,6 +139,8 @@ function startPromptText(): string {
 }
 
 async function main(): Promise<void> {
+  startBackgroundUpdateCheck();
+
   const server = new McpServer(
     {
       name: "membase",
@@ -172,26 +189,20 @@ async function main(): Promise<void> {
           error: error instanceof Error ? error.message : String(error),
         }));
       await client.registerConnection().catch(() => undefined);
-      return success(
-        JSON.stringify(
-          {
-            message: "Membase connected.",
-            logged_in: true,
-            auto_capture: nextConfig.captureMode,
-            session_start_context: nextConfig.sessionStartContext,
-            project: resolveProjectSlug(process.cwd(), nextConfig) ?? null,
-            profile,
-            account_switched: hadExistingTokens,
-            stale_session_context_warning: hadExistingTokens
-              ? staleSessionContextWarning("login")
-              : undefined,
-            latest_context_note:
-              "This login result is the latest Membase account context for this Claude Code session.",
-          },
-          null,
-          2,
-        ),
-      );
+      return jsonSuccess({
+        message: "Membase connected.",
+        logged_in: true,
+        auto_capture: nextConfig.captureMode,
+        session_start_context: nextConfig.sessionStartContext,
+        project: resolveProjectSlug(process.cwd(), nextConfig) ?? null,
+        profile,
+        account_switched: hadExistingTokens,
+        stale_session_context_warning: hadExistingTokens
+          ? staleSessionContextWarning("login")
+          : undefined,
+        latest_context_note:
+          "This login result is the latest Membase account context for this Claude Code session.",
+      });
     },
   );
 
@@ -212,20 +223,14 @@ async function main(): Promise<void> {
       const hadExistingTokens = Boolean(readTokens());
       clearTokens();
       saveConfig({ captureMode: "off" });
-      return success(
-        JSON.stringify(
-          {
-            message: "Logged out of Membase. Auto-capture disabled.",
-            logged_in: false,
-            auto_capture: "off",
-            stale_session_context_warning: hadExistingTokens
-              ? staleSessionContextWarning("logout")
-              : undefined,
-          },
-          null,
-          2,
-        ),
-      );
+      return jsonSuccess({
+        message: "Logged out of Membase. Auto-capture disabled.",
+        logged_in: false,
+        auto_capture: "off",
+        stale_session_context_warning: hadExistingTokens
+          ? staleSessionContextWarning("logout")
+          : undefined,
+      });
     },
   );
 
@@ -242,7 +247,7 @@ async function main(): Promise<void> {
         openWorldHint: false,
       },
     },
-    async () => success(JSON.stringify(await statusPayload(), null, 2)),
+    async () => jsonSuccess(await statusPayload()),
   );
 
   server.registerTool(

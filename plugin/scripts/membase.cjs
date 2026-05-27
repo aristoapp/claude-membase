@@ -8,7 +8,7 @@ var import_node_path4 = require("node:path");
 var import_promises = require("node:readline/promises");
 
 // src/constants.ts
-var PLUGIN_VERSION = "0.1.1";
+var PLUGIN_VERSION = "0.1.2";
 var DEFAULT_API_URL = "https://api.membase.so";
 var DEFAULT_MCP_URL = "https://mcp.membase.so/mcp";
 var MEMORY_SOURCE = "claude-code";
@@ -221,18 +221,15 @@ function spawnDetached(command, args) {
   child.once("error", () => void 0);
   child.unref();
 }
+function browserLaunchCommand(url, platform = process.platform) {
+  if (platform === "darwin") return { command: "open", args: [url] };
+  if (platform === "win32") return { command: "explorer.exe", args: [url] };
+  return { command: "xdg-open", args: [url] };
+}
 function openBrowser(url) {
-  const platform = process.platform;
   try {
-    if (platform === "darwin") {
-      spawnDetached("open", [url]);
-      return;
-    }
-    if (platform === "win32") {
-      spawnDetached("cmd", ["/c", "start", "", url]);
-      return;
-    }
-    spawnDetached("xdg-open", [url]);
+    const launch = browserLaunchCommand(url);
+    spawnDetached(launch.command, launch.args);
   } catch {
   }
 }

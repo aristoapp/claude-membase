@@ -6800,9 +6800,9 @@ var require_dist = __commonJS({
 });
 
 // src/mcp/server.ts
-var import_node_fs4 = require("node:fs");
+var import_node_fs5 = require("node:fs");
 var import_node_os2 = require("node:os");
-var import_node_path4 = require("node:path");
+var import_node_path5 = require("node:path");
 
 // node_modules/zod/v3/helpers/util.js
 var util;
@@ -30863,7 +30863,7 @@ var StdioServerTransport = class {
 };
 
 // src/constants.ts
-var PLUGIN_VERSION = "0.1.1";
+var PLUGIN_VERSION = "0.1.2";
 var DEFAULT_API_URL = "https://api.membase.so";
 var DEFAULT_MCP_URL = "https://mcp.membase.so/mcp";
 var MEMORY_SOURCE = "claude-code";
@@ -31076,18 +31076,15 @@ function spawnDetached(command, args) {
   child.once("error", () => void 0);
   child.unref();
 }
+function browserLaunchCommand(url2, platform = process.platform) {
+  if (platform === "darwin") return { command: "open", args: [url2] };
+  if (platform === "win32") return { command: "explorer.exe", args: [url2] };
+  return { command: "xdg-open", args: [url2] };
+}
 function openBrowser(url2) {
-  const platform = process.platform;
   try {
-    if (platform === "darwin") {
-      spawnDetached("open", [url2]);
-      return;
-    }
-    if (platform === "win32") {
-      spawnDetached("cmd", ["/c", "start", "", url2]);
-      return;
-    }
-    spawnDetached("xdg-open", [url2]);
+    const launch = browserLaunchCommand(url2);
+    spawnDetached(launch.command, launch.args);
   } catch {
   }
 }
@@ -31627,6 +31624,160 @@ function resolveProjectSlug(cwd, config2) {
   return normalizeProjectSlug((0, import_node_path3.basename)(cwd));
 }
 
+// src/update-check.ts
+var import_node_fs4 = require("node:fs");
+var import_promises = require("node:fs/promises");
+var import_node_path4 = require("node:path");
+var MARKETPLACE_URL = "https://raw.githubusercontent.com/aristoapp/claude-membase/main/.claude-plugin/marketplace.json";
+var MARKETPLACE_NAME = "membase-plugins";
+var PLUGIN_NAME = "membase";
+var FETCH_TIMEOUT_MS = 3e3;
+var CACHE_TTL_MS = 1e3 * 60 * 60 * 24;
+function updateCheckStatePath() {
+  return (0, import_node_path4.join)(getDataDir(), "update-check.json");
+}
+function isNewerVersion(remote, local) {
+  const parse4 = (value) => (value.split("-", 1)[0] || value).split(".").map((part) => {
+    const parsed = Number.parseInt(part, 10);
+    return Number.isFinite(parsed) ? parsed : 0;
+  });
+  const remoteParts = parse4(remote);
+  const localParts = parse4(local);
+  const length = Math.max(remoteParts.length, localParts.length, 3);
+  for (let index = 0; index < length; index++) {
+    const remotePart = remoteParts[index] ?? 0;
+    const localPart = localParts[index] ?? 0;
+    if (remotePart > localPart) return true;
+    if (remotePart < localPart) return false;
+  }
+  return false;
+}
+async function loadState() {
+  const path = updateCheckStatePath();
+  if (!(0, import_node_fs4.existsSync)(path)) return null;
+  try {
+    const parsed = JSON.parse(
+      await (0, import_promises.readFile)(path, "utf-8")
+    );
+    if (typeof parsed.checked_at !== "string") return null;
+    return {
+      checked_at: parsed.checked_at,
+      current_version: typeof parsed.current_version === "string" ? parsed.current_version : PLUGIN_VERSION,
+      latest_version: typeof parsed.latest_version === "string" ? parsed.latest_version : null,
+      shown_at: typeof parsed.shown_at === "string" ? parsed.shown_at : null
+    };
+  } catch {
+    return null;
+  }
+}
+async function saveState(state) {
+  const dir = getDataDir();
+  await (0, import_promises.mkdir)(dir, { recursive: true, mode: 448 });
+  await (0, import_promises.writeFile)(
+    updateCheckStatePath(),
+    `${JSON.stringify(state, null, 2)}
+`,
+    {
+      mode: 384
+    }
+  );
+}
+function isFreshCheck(checkedAt, now) {
+  const checkedAtMs = Date.parse(checkedAt);
+  if (!Number.isFinite(checkedAtMs)) return false;
+  return now.getTime() - checkedAtMs < CACHE_TTL_MS;
+}
+function isSameUtcDay(value, now) {
+  if (!value) return false;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return false;
+  const then = new Date(parsed);
+  return then.getUTCFullYear() === now.getUTCFullYear() && then.getUTCMonth() === now.getUTCMonth() && then.getUTCDate() === now.getUTCDate();
+}
+async function fetchLatestVersion(fetchImpl = fetch) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetchImpl(MARKETPLACE_URL, {
+      headers: { accept: "application/json" },
+      signal: controller.signal
+    });
+    if (!response.ok) return null;
+    const body = await response.json();
+    const plugin = Array.isArray(body.plugins) ? body.plugins.find((entry) => entry.name === PLUGIN_NAME) : void 0;
+    return typeof plugin?.version === "string" ? plugin.version : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function refreshLatestVersion(deps = {}) {
+  const load = deps.loadStateFn ?? loadState;
+  const save = deps.saveStateFn ?? saveState;
+  const fetchVersion = deps.fetchImpl ? () => fetchLatestVersion(deps.fetchImpl) : () => fetchLatestVersion();
+  const currentVersion = deps.currentVersion ?? PLUGIN_VERSION;
+  const now = deps.now?.() ?? /* @__PURE__ */ new Date();
+  const existing = await load();
+  if (existing?.checked_at && existing.current_version === currentVersion && isFreshCheck(existing.checked_at, now)) {
+    return;
+  }
+  const latestVersion = await fetchVersion();
+  if (!latestVersion) return;
+  await save({
+    checked_at: now.toISOString(),
+    current_version: currentVersion,
+    latest_version: latestVersion,
+    shown_at: existing?.latest_version === latestVersion ? existing.shown_at ?? null : null
+  });
+}
+function buildUpdateNotice(current, latest) {
+  return [
+    `Membase Claude Code plugin update available: ${current} -> ${latest}.`,
+    `Run: /plugin marketplace update ${MARKETPLACE_NAME}`,
+    `Then: /plugin update ${PLUGIN_NAME}@${MARKETPLACE_NAME}`,
+    "After updating, run: /reload-plugins"
+  ].join("\n");
+}
+async function consumeUpdateNotice(deps = {}) {
+  const load = deps.loadStateFn ?? loadState;
+  const save = deps.saveStateFn ?? saveState;
+  const currentVersion = deps.currentVersion ?? PLUGIN_VERSION;
+  const now = deps.now?.() ?? /* @__PURE__ */ new Date();
+  let state = await load();
+  if (!state) {
+    await refreshLatestVersion(deps).catch(() => void 0);
+    state = await load();
+  }
+  if (!state?.latest_version) return null;
+  if (state.current_version !== currentVersion) return null;
+  if (!isNewerVersion(state.latest_version, currentVersion)) return null;
+  if (isSameUtcDay(state.shown_at, now)) return null;
+  try {
+    await save({ ...state, shown_at: now.toISOString() });
+  } catch {
+  }
+  return buildUpdateNotice(currentVersion, state.latest_version);
+}
+async function withUpdateNotice(text, deps = {}) {
+  try {
+    const notice = await consumeUpdateNotice(deps);
+    return notice ? `${text}
+
+---
+${notice}` : text;
+  } catch {
+    return text;
+  }
+}
+async function toolResponse(text, deps = {}) {
+  const withNotice = await withUpdateNotice(text, deps);
+  return { content: [{ type: "text", text: withNotice }] };
+}
+function startBackgroundUpdateCheck() {
+  refreshLatestVersion().catch(() => void 0);
+}
+
 // src/mcp/server.ts
 var MemoryContentSchema = external_exports.string().min(1).max(5e4);
 var MemoryProjectSchema = external_exports.string().max(60).optional();
@@ -31644,19 +31795,28 @@ function requireClient() {
     client: createClient(config2.apiUrl, tokens, writeTokens)
   };
 }
-function success2(text) {
+async function success2(text) {
+  return toolResponse(text);
+}
+async function jsonSuccess(payload) {
+  const notice = await consumeUpdateNotice().catch(() => null);
+  const text = JSON.stringify(
+    notice ? { ...payload, update_notice: notice } : payload,
+    null,
+    2
+  );
   return { content: [{ type: "text", text }] };
 }
 function duplicateMcpConfigs() {
   const candidates = [
-    (0, import_node_path4.join)((0, import_node_os2.homedir)(), ".claude.json"),
-    (0, import_node_path4.join)(process.cwd(), ".mcp.json")
+    (0, import_node_path5.join)((0, import_node_os2.homedir)(), ".claude.json"),
+    (0, import_node_path5.join)(process.cwd(), ".mcp.json")
   ];
   const matches = [];
   for (const path of candidates) {
-    if (!(0, import_node_fs4.existsSync)(path)) continue;
+    if (!(0, import_node_fs5.existsSync)(path)) continue;
     try {
-      const raw = (0, import_node_fs4.readFileSync)(path, "utf-8");
+      const raw = (0, import_node_fs5.readFileSync)(path, "utf-8");
       const lower = raw.toLowerCase();
       const hasMembaseRemoteUrl = lower.includes(DEFAULT_MCP_URL);
       const hasLegacyMembaseRemote = lower.includes("membase") && lower.includes("mcp-remote");
@@ -31712,6 +31872,7 @@ function startPromptText() {
   ].join("\n");
 }
 async function main() {
+  startBackgroundUpdateCheck();
   const server = new McpServer(
     {
       name: "membase",
@@ -31755,23 +31916,17 @@ async function main() {
         error: error51 instanceof Error ? error51.message : String(error51)
       }));
       await client.registerConnection().catch(() => void 0);
-      return success2(
-        JSON.stringify(
-          {
-            message: "Membase connected.",
-            logged_in: true,
-            auto_capture: nextConfig.captureMode,
-            session_start_context: nextConfig.sessionStartContext,
-            project: resolveProjectSlug(process.cwd(), nextConfig) ?? null,
-            profile,
-            account_switched: hadExistingTokens,
-            stale_session_context_warning: hadExistingTokens ? staleSessionContextWarning("login") : void 0,
-            latest_context_note: "This login result is the latest Membase account context for this Claude Code session."
-          },
-          null,
-          2
-        )
-      );
+      return jsonSuccess({
+        message: "Membase connected.",
+        logged_in: true,
+        auto_capture: nextConfig.captureMode,
+        session_start_context: nextConfig.sessionStartContext,
+        project: resolveProjectSlug(process.cwd(), nextConfig) ?? null,
+        profile,
+        account_switched: hadExistingTokens,
+        stale_session_context_warning: hadExistingTokens ? staleSessionContextWarning("login") : void 0,
+        latest_context_note: "This login result is the latest Membase account context for this Claude Code session."
+      });
     }
   );
   server.registerTool(
@@ -31790,18 +31945,12 @@ async function main() {
       const hadExistingTokens = Boolean(readTokens());
       clearTokens();
       saveConfig({ captureMode: "off" });
-      return success2(
-        JSON.stringify(
-          {
-            message: "Logged out of Membase. Auto-capture disabled.",
-            logged_in: false,
-            auto_capture: "off",
-            stale_session_context_warning: hadExistingTokens ? staleSessionContextWarning("logout") : void 0
-          },
-          null,
-          2
-        )
-      );
+      return jsonSuccess({
+        message: "Logged out of Membase. Auto-capture disabled.",
+        logged_in: false,
+        auto_capture: "off",
+        stale_session_context_warning: hadExistingTokens ? staleSessionContextWarning("logout") : void 0
+      });
     }
   );
   server.registerTool(
@@ -31816,7 +31965,7 @@ async function main() {
         openWorldHint: false
       }
     },
-    async () => success2(JSON.stringify(await statusPayload(), null, 2))
+    async () => jsonSuccess(await statusPayload())
   );
   server.registerTool(
     "set_project_config",
