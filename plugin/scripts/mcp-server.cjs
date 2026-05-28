@@ -30863,7 +30863,7 @@ var StdioServerTransport = class {
 };
 
 // src/constants.ts
-var PLUGIN_VERSION = "0.1.2";
+var PLUGIN_VERSION = "0.1.3";
 var DEFAULT_API_URL = "https://api.membase.so";
 var DEFAULT_MCP_URL = "https://mcp.membase.so/mcp";
 var MEMORY_SOURCE = "claude-code";
@@ -31078,7 +31078,12 @@ function spawnDetached(command, args) {
 }
 function browserLaunchCommand(url2, platform = process.platform) {
   if (platform === "darwin") return { command: "open", args: [url2] };
-  if (platform === "win32") return { command: "explorer.exe", args: [url2] };
+  if (platform === "win32") {
+    return {
+      command: "rundll32.exe",
+      args: ["url.dll,FileProtocolHandler", url2]
+    };
+  }
   return { command: "xdg-open", args: [url2] };
 }
 function openBrowser(url2) {
@@ -31734,6 +31739,7 @@ async function refreshLatestVersion(deps = {}) {
 function buildUpdateNotice(current, latest) {
   return [
     `Membase Claude Code plugin update available: ${current} -> ${latest}.`,
+    "Inside Claude Code, run:",
     `Run: /plugin marketplace update ${MARKETPLACE_NAME}`,
     `Then: /plugin update ${PLUGIN_NAME}@${MARKETPLACE_NAME}`,
     "After updating, run: /reload-plugins"

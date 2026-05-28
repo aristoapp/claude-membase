@@ -173,6 +173,7 @@ export async function refreshLatestVersion(
 export function buildUpdateNotice(current: string, latest: string): string {
   return [
     `Membase Claude Code plugin update available: ${current} -> ${latest}.`,
+    "Inside Claude Code, run:",
     `Run: /plugin marketplace update ${MARKETPLACE_NAME}`,
     `Then: /plugin update ${PLUGIN_NAME}@${MARKETPLACE_NAME}`,
     "After updating, run: /reload-plugins",

@@ -7,8 +7,8 @@ describe("oauth browser launch", () => {
       "https://api.membase.so/oauth/authorize?response_type=code&client_id=abc&redirect_uri=http%3A%2F%2F127.0.0.1%2Fcallback";
 
     expect(browserLaunchCommand(url, "win32")).toEqual({
-      command: "explorer.exe",
-      args: [url],
+      command: "rundll32.exe",
+      args: ["url.dll,FileProtocolHandler", url],
     });
   });
 });
