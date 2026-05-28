@@ -32,9 +32,9 @@ describe("update check", () => {
   });
 
   it("builds Claude Code update instructions", () => {
-    expect(buildUpdateNotice("0.1.1", "0.1.2")).toContain(
-      "/plugin update membase@membase-plugins",
-    );
+    const notice = buildUpdateNotice("0.1.3", "0.1.4");
+    expect(notice).toContain("claude plugin --help");
+    expect(notice).toContain("claude plugin update membase@membase-plugins");
   });
 
   it("shows the update notice once per UTC day", async () => {

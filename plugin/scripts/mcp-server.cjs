@@ -30863,7 +30863,7 @@ var StdioServerTransport = class {
 };
 
 // src/constants.ts
-var PLUGIN_VERSION = "0.1.3";
+var PLUGIN_VERSION = "0.1.4";
 var DEFAULT_API_URL = "https://api.membase.so";
 var DEFAULT_MCP_URL = "https://mcp.membase.so/mcp";
 var MEMORY_SOURCE = "claude-code";
@@ -31739,10 +31739,12 @@ async function refreshLatestVersion(deps = {}) {
 function buildUpdateNotice(current, latest) {
   return [
     `Membase Claude Code plugin update available: ${current} -> ${latest}.`,
-    "Inside Claude Code, run:",
-    `Run: /plugin marketplace update ${MARKETPLACE_NAME}`,
-    `Then: /plugin update ${PLUGIN_NAME}@${MARKETPLACE_NAME}`,
-    "After updating, run: /reload-plugins"
+    "In your terminal, verify plugin support:",
+    "claude plugin --help",
+    "Then update:",
+    `claude plugin marketplace update ${MARKETPLACE_NAME}`,
+    `claude plugin update ${PLUGIN_NAME}@${MARKETPLACE_NAME}`,
+    "Restart Claude Code after updating."
   ].join("\n");
 }
 async function consumeUpdateNotice(deps = {}) {

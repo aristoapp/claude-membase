@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "membase",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "description": "Persistent memory and wiki workflows for Claude Code.",
       "source": "./plugin",
       "homepage": "https://membase.so",

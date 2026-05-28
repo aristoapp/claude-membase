@@ -1,5 +1,5 @@
 export const PLUGIN_NAME = "claude-membase";
-export const PLUGIN_VERSION = "0.1.3";
+export const PLUGIN_VERSION = "0.1.4";
 export const DEFAULT_API_URL = "https://api.membase.so";
 export const DEFAULT_MCP_URL = "https://mcp.membase.so/mcp";
 export const MEMORY_SOURCE = "claude-code";
