@@ -36,7 +36,7 @@ describe("memory formatting", () => {
     const context = buildRecallContext(
       [
         {
-          title: "Project memories (project=aristoapp-claude-membase)",
+          title: "Project memories (project=example-project)",
           memories: [memory("project", "Project decision")],
         },
         {
@@ -49,9 +49,7 @@ describe("memory formatting", () => {
       4000,
     );
 
-    expect(context).toContain(
-      "Project memories (project=aristoapp-claude-membase)",
-    );
+    expect(context).toContain("Project memories (project=example-project)");
     expect(context).toContain("Broader memories (unscoped search)");
     expect(context).toContain("prefetch limit reached");
     expect(context).toContain("Use search_memory for deeper recall");

@@ -29,11 +29,10 @@ database. Memories and wiki documents are saved to your Membase account.
 
 ## Privacy
 
-Auto-capture is opt-in during `/membase:login`. Summary capture stores bounded
-Claude Code tool summaries and Claude-provided compact summaries. It does not
-save raw transcript tails. Captures avoid secrets, `.env` values, private key
-blocks, raw source files, long terminal output, and content wrapped in
-`<private>` or `<membase-private>`.
+Auto-capture is opt-in during `/membase:login`. Wiki capture stores the
+user/assistant conversation transcript as original source material in Membase
+Wiki, not as extracted memory. Captures redact secrets, `.env` values, private
+key blocks, and content wrapped in `<private>` or `<membase-private>`.
 
 Session start context is controlled by the `sessionStartContext` plugin setting:
 `minimal` injects connection/project status and routing guidance, `profile` also

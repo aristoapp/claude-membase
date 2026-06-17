@@ -1,5 +1,5 @@
 {
-  "description": "Membase automatic recall and summary capture for Claude Code.",
+  "description": "Membase automatic recall and Wiki transcript capture for Claude Code.",
   "hooks": {
     "SessionStart": [
       {
@@ -23,48 +23,12 @@
         ]
       }
     ],
-    "PostToolBatch": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.cjs PostToolBatch",
-            "async": true,
-            "timeout": 20
-          }
-        ]
-      }
-    ],
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
             "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.cjs Stop",
-            "async": true,
-            "timeout": 20
-          }
-        ]
-      }
-    ],
-    "PreCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.cjs PreCompact",
-            "async": true,
-            "timeout": 20
-          }
-        ]
-      }
-    ],
-    "PostCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.cjs PostCompact",
             "async": true,
             "timeout": 20
           }

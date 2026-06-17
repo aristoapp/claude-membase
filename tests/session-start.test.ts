@@ -17,11 +17,11 @@ describe("SessionStart context", () => {
   it("uses minimal context by default without injecting recent memories", () => {
     const context = buildSessionStartContext({
       mode: "minimal",
-      projectSlug: "aristoapp-claude-membase",
+      projectSlug: "example-project",
       profile,
     });
 
-    expect(context).toContain("project_slug: aristoapp-claude-membase");
+    expect(context).toContain("project_slug: example-project");
     expect(context).toContain("account:");
     expect(context).toContain("search_memory");
     expect(context).toContain("membase://profile");
@@ -34,7 +34,7 @@ describe("SessionStart context", () => {
   it("can include full profile settings when explicitly configured", () => {
     const context = buildSessionStartContext({
       mode: "profile",
-      projectSlug: "aristoapp-claude-membase",
+      projectSlug: "example-project",
       profile,
     });
 

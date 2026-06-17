@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../src/config/index.js";
@@ -48,6 +48,16 @@ describe("config", () => {
     withTempConfig(() => {
       process.env.CLAUDE_PLUGIN_OPTION_sessionStartContext = "recent";
       expect(loadConfig().sessionStartContext).toBe("minimal");
+    });
+  });
+
+  it("migrates legacy summary capture mode to wiki", () => {
+    withTempConfig(() => {
+      writeFileSync(
+        join(process.env.CLAUDE_PLUGIN_DATA ?? "", "config.json"),
+        `${JSON.stringify({ captureMode: "summary" })}\n`,
+      );
+      expect(loadConfig().captureMode).toBe("wiki");
     });
   });
 });

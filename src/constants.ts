@@ -1,9 +1,10 @@
 export const PLUGIN_NAME = "claude-membase";
-export const PLUGIN_VERSION = "0.1.4";
+export const PLUGIN_VERSION = "0.2.0";
 export const DEFAULT_API_URL = "https://api.membase.so";
 export const DEFAULT_MCP_URL = "https://mcp.membase.so/mcp";
 export const MEMORY_SOURCE = "claude-code";
 export const USER_AGENT = `membase-claude-code/${PLUGIN_VERSION}`;
+export const DEFAULT_API_TIMEOUT_MS = 180_000;
 export const DEFAULT_RECALL_TIMEOUT_MS = 3_000;
 export const DEFAULT_MAX_RECALL_CHARS = 4_000;
 export const MAX_RECALL_CHARS = 16_000;

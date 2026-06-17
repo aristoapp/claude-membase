@@ -1,4 +1,10 @@
-import { MEMORY_SOURCE, USER_AGENT } from "../constants.js";
+import {
+  DEFAULT_API_TIMEOUT_MS,
+  MEMORY_SOURCE,
+  PLUGIN_NAME,
+  PLUGIN_VERSION,
+  USER_AGENT,
+} from "../constants.js";
 import type {
   EpisodeBundle,
   MembaseApiError as MembaseApiErrorType,
@@ -6,6 +12,7 @@ import type {
   WikiDocument,
 } from "../types.js";
 import { MembaseApiError } from "../types.js";
+import { resolveWikiProjectInput } from "../wiki-project.js";
 
 export interface ClientOptions {
   apiUrl: string;
@@ -24,7 +31,7 @@ export class MembaseClient {
   constructor(options: ClientOptions) {
     this.apiUrl = options.apiUrl.replace(/\/$/, "");
     this.tokens = options.tokens;
-    this.timeoutMs = options.timeoutMs ?? 15_000;
+    this.timeoutMs = options.timeoutMs ?? DEFAULT_API_TIMEOUT_MS;
     this.onTokenRefresh = options.onTokenRefresh;
   }
 
@@ -180,13 +187,18 @@ export class MembaseClient {
   async searchWiki(args: {
     query: string;
     limit?: number;
+    project?: string;
     collection?: string;
   }): Promise<WikiDocument[]> {
+    const projectInput = resolveWikiProjectInput(args);
+    if (projectInput.error) {
+      throw new MembaseApiError(projectInput.error, 400);
+    }
     const params = new URLSearchParams({
       query: args.query,
       limit: String(args.limit ?? 10),
     });
-    if (args.collection) params.set("collection", args.collection);
+    if (projectInput.value) params.set("project", projectInput.value);
     const data = await this.request<{ documents: WikiDocument[] }>(
       `/wiki/search?${params.toString()}`,
     );
@@ -196,17 +208,27 @@ export class MembaseClient {
   async addWiki(args: {
     title: string;
     content: string;
+    project?: string;
     collection?: string;
-    summarize?: boolean;
+    source_metadata?: Record<string, unknown>;
   }): Promise<WikiDocument> {
+    const projectInput = resolveWikiProjectInput(args);
+    if (projectInput.error) {
+      throw new MembaseApiError(projectInput.error, 400);
+    }
     return this.request("/wiki/documents", {
       method: "POST",
       body: JSON.stringify({
         title: args.title,
         content: args.content,
-        collection: args.collection,
-        summarize: args.summarize ?? false,
         source: MEMORY_SOURCE,
+        source_metadata: {
+          ...(args.source_metadata ?? {}),
+          plugin_name: PLUGIN_NAME,
+          plugin_version: PLUGIN_VERSION,
+          host: "claude-code",
+        },
+        project: projectInput.value ?? undefined,
       }),
     });
   }
@@ -215,16 +237,29 @@ export class MembaseClient {
     doc_id: string;
     title?: string;
     content?: string;
+    project?: string | null;
     collection?: string;
   }): Promise<WikiDocument> {
+    const projectInput = resolveWikiProjectInput(args);
+    if (projectInput.error) {
+      throw new MembaseApiError(projectInput.error, 400);
+    }
     return this.request(`/wiki/documents/${args.doc_id}`, {
       method: "PUT",
       body: JSON.stringify({
         title: args.title,
         content: args.content,
-        collection: args.collection,
+        collection_id: projectInput.value === null ? null : undefined,
+        project:
+          projectInput.value !== undefined && projectInput.value !== null
+            ? projectInput.value
+            : undefined,
       }),
     });
+  }
+
+  async getKnownWikiProjects(): Promise<string[]> {
+    return this.request("/wiki/collections/known");
   }
 
   async deleteWiki(docId: string): Promise<void> {

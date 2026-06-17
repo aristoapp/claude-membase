@@ -1,4 +1,9 @@
-import type { EpisodeBundle, WikiDocument } from "../types.js";
+import type {
+  EpisodeBundle,
+  WikiDocument,
+  WikiDocumentRoutingInfo,
+  WikiSourceReference,
+} from "../types.js";
 import { truncateText } from "../sanitize/index.js";
 
 export interface RecallMemoryGroup {
@@ -59,19 +64,193 @@ export function formatMemorySearchResults(
   return `${header}\n${bundles.map(formatBundle).join("\n\n")}`;
 }
 
-export function formatWikiDocument(doc: WikiDocument, index: number): string {
-  const score =
-    typeof doc.similarity === "number"
-      ? ` score=${doc.similarity.toFixed(3)}`
+function formatDate(value: string | null | undefined): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(0, 10);
+}
+
+function normalizeProjectName(value: string | null | undefined): string {
+  return value?.trim() ?? "";
+}
+
+export function formatSearchProjectName(
+  collectionId: string | null | undefined,
+  collectionName: string | null | undefined,
+): string {
+  return (
+    normalizeProjectName(collectionName) || (collectionId ? "Unknown" : "Basic")
+  );
+}
+
+export function appendResultSentence(base: string, sentence?: string): string {
+  return sentence ? `${base}. ${sentence}` : base;
+}
+
+export function formatSavedDestination(
+  routing: WikiDocumentRoutingInfo | null | undefined,
+  collectionId: string | null | undefined,
+  explicitProject?: string,
+): string | undefined {
+  if (routing?.fallback) {
+    return "Saved to Basic because no confident Project was found.";
+  }
+
+  const routedProjectName = normalizeProjectName(routing?.collection_name);
+  if (routedProjectName) {
+    return `Saved to Project: ${routedProjectName}.`;
+  }
+
+  const explicitProjectName = normalizeProjectName(explicitProject);
+  if (explicitProjectName && collectionId) {
+    return `Saved to Project: ${explicitProjectName}.`;
+  }
+
+  if (!collectionId) {
+    return "Saved to Basic.";
+  }
+
+  return undefined;
+}
+
+export function formatMovedDestination(
+  project: string | null | undefined,
+  collectionId: string | null | undefined,
+): string | undefined {
+  if (project === undefined) return undefined;
+  if (project === null) {
+    return !collectionId ? "Moved to Basic." : undefined;
+  }
+
+  const projectName = normalizeProjectName(project);
+  if (!projectName) return undefined;
+
+  return collectionId
+    ? `Moved to Project: ${projectName}.`
+    : "Current destination: Basic.";
+}
+
+export function formatWikiCreateResult(
+  doc: WikiDocument,
+  explicitProject?: string,
+): string {
+  return appendResultSentence(
+    `Wiki document created: "${doc.title}" (ID: ${doc.id})`,
+    formatSavedDestination(doc.routing, doc.collection_id, explicitProject),
+  );
+}
+
+export function formatWikiUpdateResult(
+  doc: WikiDocument,
+  project: string | null | undefined,
+): string {
+  return appendResultSentence(
+    `Wiki document updated: "${doc.title}" (ID: ${doc.id})`,
+    formatMovedDestination(project, doc.collection_id),
+  );
+}
+
+function formatSourceName(source: string | null | undefined): string {
+  if (!source) return "Source";
+  return source
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function formatSourceReference(ref: WikiSourceReference): string {
+  const label = formatSourceName(ref.source);
+  const title = ref.title?.trim();
+  const base = ref.url
+    ? `${title ? `${label} - ${title}` : label} (${ref.url})`
+    : title
+      ? `${label} - ${title}`
+      : label;
+
+  if (ref.status && ref.status !== "active") {
+    return ref.warning
+      ? `${base} [${ref.status}: ${ref.warning}]`
+      : `${base} [${ref.status}]`;
+  }
+
+  return base;
+}
+
+const SOURCE_REFERENCE_PRIORITY: Record<
+  WikiSourceReference["link_type"],
+  number
+> = {
+  primary: 0,
+  updated: 1,
+  supporting: 2,
+  derived: 3,
+};
+
+function formatSourceReferences(
+  refs: WikiSourceReference[] | null | undefined,
+): string {
+  const sortedRefs = [...(refs ?? [])]
+    .filter((ref) => ref?.source)
+    .sort(
+      (a, b) =>
+        (SOURCE_REFERENCE_PRIORITY[a.link_type] ?? 99) -
+        (SOURCE_REFERENCE_PRIORITY[b.link_type] ?? 99),
+    );
+  const primary = sortedRefs[0];
+  if (!primary) return "";
+  const extraCount = sortedRefs.length - 1;
+  const suffix =
+    extraCount > 0
+      ? `; +${extraCount} additional reference${extraCount === 1 ? "" : "s"}`
       : "";
-  const collection = doc.collection_name
-    ? ` collection=${doc.collection_name}`
-    : "";
+  return `Source: ${formatSourceReference(primary)}${suffix}`;
+}
+
+function formatWikiDocumentDetails(doc: WikiDocument): string {
+  const parts: string[] = [];
+  const sourceReferences = formatSourceReferences(doc.source_references);
+  if (sourceReferences) {
+    parts.push(sourceReferences);
+  } else if (doc.source) {
+    parts.push(`source: ${doc.source}`);
+  }
+  if (doc.source_status && doc.source_status !== "active") {
+    parts.push(`source_status: ${doc.source_status}`);
+  }
+  if (doc.source_warning) {
+    parts.push(`source_warning: ${doc.source_warning}`);
+  }
+  const sourceChecked = formatDate(doc.source_last_checked_at);
+  if (sourceChecked && doc.source_status && doc.source_status !== "active") {
+    parts.push(`source_checked: ${sourceChecked}`);
+  }
+  const created = formatDate(doc.created_at);
+  if (created) parts.push(`created: ${created}`);
+  const updated = formatDate(doc.updated_at);
+  if (updated) parts.push(`updated: ${updated}`);
+  return parts.join("; ");
+}
+
+export function formatWikiDocument(doc: WikiDocument, index: number): string {
+  const similarity =
+    typeof doc.similarity === "number"
+      ? ` [similarity: ${doc.similarity.toFixed(3)}]`
+      : "";
+  const project = ` [Project: ${formatSearchProjectName(
+    doc.collection_id,
+    doc.collection_name,
+  )}]`;
+  const details = formatWikiDocumentDetails(doc);
   return [
-    `${index + 1}. ${truncateText(doc.title, 180)}${score}${collection}`,
+    `${index + 1}. ${truncateText(doc.title, 180)}${project}${similarity}`,
     `   id: ${doc.id}`,
+    details ? `   ${details}` : "",
     `   ${truncateText(doc.content, 700)}`,
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export function buildRecallContext(

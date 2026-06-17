@@ -98,7 +98,8 @@ function numberFromOption(name: string): number | undefined {
 }
 
 function normalizeCaptureMode(value: unknown): CaptureMode {
-  return value === "summary" ? "summary" : "off";
+  if (value === "wiki" || value === "summary") return "wiki";
+  return "off";
 }
 
 function normalizeProjectMode(value: unknown): ProjectMode {

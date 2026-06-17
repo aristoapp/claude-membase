@@ -21,6 +21,7 @@ import { sanitizeMembaseText, truncateText } from "../sanitize/index.js";
 const LOCK_STALE_MS = 30_000;
 const LOCK_WAIT_MS = 2_000;
 const INFLIGHT_STALE_MS = 60_000;
+const MAX_WIKI_CAPTURE_CHARS = 95_000;
 const SLEEP_BUFFER = new SharedArrayBuffer(4);
 const SLEEP_VIEW = new Int32Array(SLEEP_BUFFER);
 
@@ -90,6 +91,55 @@ function withSpoolLock<T>(callback: () => T, timeoutMs = LOCK_WAIT_MS): T {
 
 function hash(input: string): string {
   return createHash("sha256").update(input).digest("hex");
+}
+
+function splitContent(content: string): string[] {
+  if (content.length <= MAX_WIKI_CAPTURE_CHARS) return [content];
+  const chunks: string[] = [];
+  let current: string[] = [];
+  let currentSize = 0;
+  const pushCurrent = () => {
+    if (current.length === 0) return;
+    chunks.push(current.join("\n\n").trim());
+    current = [];
+    currentSize = 0;
+  };
+  for (const block of content.split("\n\n")) {
+    if (block.length > MAX_WIKI_CAPTURE_CHARS) {
+      let remainder = block;
+      if (current.length > 0) {
+        const remainingSpace = MAX_WIKI_CAPTURE_CHARS - currentSize - 2;
+        const prefix = remainingSpace > 0 ? block.slice(0, remainingSpace) : "";
+        if (prefix) {
+          current.push(prefix);
+          remainder = block.slice(prefix.length);
+        }
+        pushCurrent();
+      }
+      for (
+        let start = 0;
+        start < remainder.length;
+        start += MAX_WIKI_CAPTURE_CHARS
+      ) {
+        chunks.push(remainder.slice(start, start + MAX_WIKI_CAPTURE_CHARS));
+      }
+    } else if (
+      current.length > 0 &&
+      currentSize + 2 + block.length > MAX_WIKI_CAPTURE_CHARS
+    ) {
+      pushCurrent();
+      current = [block];
+      currentSize = block.length;
+    } else {
+      if (current.length > 0) {
+        currentSize += 2;
+      }
+      current.push(block);
+      currentSize += block.length;
+    }
+  }
+  pushCurrent();
+  return chunks.filter(Boolean);
 }
 
 export function captureId(args: {
@@ -229,7 +279,10 @@ export function enqueueCapture(
     sessionId?: string;
   },
 ): CaptureRecord | null {
-  const content = sanitizeMembaseText(record.content);
+  const content =
+    record.capture_kind === "conversation_transcript"
+      ? record.content.trim()
+      : sanitizeMembaseText(record.content);
   if (!content || content.length < 20) return null;
   const next: CaptureRecord = {
     capture_id: captureId({
@@ -239,6 +292,7 @@ export function enqueueCapture(
     }),
     capture_kind: record.capture_kind,
     content,
+    title: record.title,
     display_summary: record.display_summary ?? truncateText(content, 180),
     project: record.project,
     metadata: record.metadata,
@@ -283,17 +337,28 @@ export async function flushSpool(
   const failed: CaptureRecord[] = [];
   let flushed = 0;
   for (const record of drained.batch) {
+    let sentPartCount = Math.max(0, record.sent_part_count ?? 0);
     try {
-      await client.ingestMemory({
-        content: record.content,
-        display_summary: record.display_summary,
-        project: record.project,
-        metadata: {
-          ...record.metadata,
-          capture_id: record.capture_id,
-          capture_kind: record.capture_kind,
-        },
-      });
+      const chunks = splitContent(record.content);
+      sentPartCount = Math.min(sentPartCount, chunks.length);
+      for (const [index, content] of chunks.entries()) {
+        if (index < sentPartCount) continue;
+        const multiPart = chunks.length > 1;
+        await client.addWiki({
+          title:
+            (record.title ?? "Claude Code conversation capture") +
+            (multiPart ? ` part ${index + 1}` : ""),
+          content,
+          project: record.project,
+          source_metadata: {
+            ...record.metadata,
+            capture_kind: record.capture_kind,
+            part_index: index + 1,
+            part_total: chunks.length,
+          },
+        });
+        sentPartCount = index + 1;
+      }
       withSpoolLock(() => {
         const sentIds = readSentIds();
         sentIds.add(record.capture_id);
@@ -304,6 +369,7 @@ export async function flushSpool(
       failed.push({
         ...record,
         attempts: (record.attempts ?? 0) + 1,
+        sent_part_count: sentPartCount,
         last_error: error instanceof Error ? error.message : String(error),
       });
     }

@@ -2,13 +2,12 @@ import { createClient } from "../api/client.js";
 import type { MembaseClient } from "../api/client.js";
 import { loadConfig, readTokens, writeTokens } from "../config/index.js";
 import {
+  DEFAULT_API_TIMEOUT_MS,
   DEFAULT_RECALL_TIMEOUT_MS,
   PREFETCH_BROADER_MEMORY_LIMIT,
   PREFETCH_MEMORY_LIMIT,
   PREFETCH_PROJECT_MEMORY_LIMIT,
   PREFETCH_WIKI_LIMIT,
-  PLUGIN_NAME,
-  PLUGIN_VERSION,
 } from "../constants.js";
 import { buildRecallContext } from "../format/index.js";
 import type { RecallMemoryGroup } from "../format/index.js";
@@ -16,18 +15,16 @@ import { resolveProjectSlug } from "../project/index.js";
 import {
   isCasualChat,
   isOperationalMessage,
-  looksSensitive,
   sanitizeRecallQuery,
-  truncateText,
 } from "../sanitize/index.js";
 import { enqueueCapture, flushSpool } from "../spool/index.js";
 import type { HookInput } from "../types.js";
 import { buildSessionStartContext } from "./session-start.js";
-import { buildSessionCaptureCandidate, summarizeToolCall } from "./summary.js";
+import { markTranscriptCaptured, readTranscriptCapture } from "./transcript.js";
 import type { EpisodeBundle } from "../types.js";
 
 const SESSION_FETCH_TIMEOUT_MS = 1_800;
-const ASYNC_FLUSH_TIMEOUT_MS = 4_000;
+const ASYNC_FLUSH_TIMEOUT_MS = DEFAULT_API_TIMEOUT_MS;
 const ASYNC_FLUSH_LIMIT = 3;
 
 function readStdin(): Promise<string> {
@@ -74,14 +71,9 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   ]);
 }
 
-function captureMetadata(input: HookInput, projectSlug?: string) {
+function captureMetadata(projectSlug?: string) {
   return {
-    plugin: PLUGIN_NAME,
-    plugin_version: PLUGIN_VERSION,
-    claude_session_id: input.session_id ?? null,
-    cwd: input.cwd ?? process.cwd(),
     project_slug: projectSlug ?? null,
-    hook_event: input.hook_event_name ?? null,
   };
 }
 
@@ -235,46 +227,26 @@ async function handleUserPromptSubmit(input: HookInput): Promise<void> {
   outputAdditionalContext(context);
 }
 
-async function spoolToolBatch(input: HookInput): Promise<void> {
+async function spoolTranscript(input: HookInput): Promise<void> {
   const config = loadConfig();
-  if (config.captureMode !== "summary") return;
+  if (config.captureMode !== "wiki") return;
   const project = resolveProjectSlug(input.cwd, config);
-  const calls = Array.isArray(input.tool_calls) ? input.tool_calls : [];
-  const summaries = calls
-    .map((call) => summarizeToolCall(call))
-    .filter((summary): summary is string => Boolean(summary));
-  if (summaries.length === 0) return;
-  const content = `Claude Code tool summary:\n\n${summaries.join("\n\n")}`;
-  if (looksSensitive(content)) return;
-  enqueueCapture({
-    capture_kind: "tool_summary",
-    content,
-    display_summary: `Claude Code used ${summaries.length} project tool(s).`,
-    project,
-    sessionId: input.session_id,
-    metadata: captureMetadata(input, project),
+  const result = readTranscriptCapture(input, project);
+  if (!result) return;
+  if (!result.capture) {
+    markTranscriptCaptured(input, result.lineCount);
+    return;
+  }
+  const queued = enqueueCapture({
+    ...result.capture,
+    metadata: {
+      ...captureMetadata(project),
+      ...result.capture.metadata,
+    },
   });
-}
-
-async function spoolSessionSummary(
-  input: HookInput,
-  captureKind: "compact_summary",
-): Promise<void> {
-  const config = loadConfig();
-  if (config.captureMode !== "summary") return;
-  const project = resolveProjectSlug(input.cwd, config);
-  const raw =
-    typeof input.compact_summary === "string" ? input.compact_summary : "";
-  const content = buildSessionCaptureCandidate(raw, captureKind);
-  if (!content || looksSensitive(content)) return;
-  enqueueCapture({
-    capture_kind: captureKind,
-    content,
-    display_summary: truncateText(content, 180),
-    project,
-    sessionId: input.session_id,
-    metadata: captureMetadata(input, project),
-  });
+  if (queued) {
+    markTranscriptCaptured(input, result.lineCount);
+  }
 }
 
 async function main(): Promise<void> {
@@ -286,19 +258,16 @@ async function main(): Promise<void> {
   const event = input.hook_event_name;
   if (event === "SessionStart") await handleSessionStart(input);
   if (event === "UserPromptSubmit") await handleUserPromptSubmit(input);
-  if (event === "PostToolBatch") await spoolToolBatch(input);
   if (event === "Stop" || event === "SessionEnd") {
     const config = loadConfig();
     const tokens = readTokens();
+    await spoolTranscript(input);
     if (tokens) {
       const client = createClient(config.apiUrl, tokens, writeTokens, {
         timeoutMs: ASYNC_FLUSH_TIMEOUT_MS,
       });
       await flushSpool(client, ASYNC_FLUSH_LIMIT).catch(() => undefined);
     }
-  }
-  if (event === "PreCompact" || event === "PostCompact") {
-    await spoolSessionSummary(input, "compact_summary");
   }
 }
 

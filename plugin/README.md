@@ -33,8 +33,7 @@ The login flow uses browser OAuth. After login, verify the account shown by
   date lookup.
 - Project-aware memory scoping using the current git repository when
   `projectMode` is `auto_git`.
-- Opt-in summary capture for durable user/project decisions and compact
-  summaries.
+- Opt-in Wiki capture for user/assistant conversation transcripts.
 
 ## Commands
 
@@ -44,8 +43,8 @@ The login flow uses browser OAuth. After login, verify the account shown by
 /membase:status
 /membase:recall <query>
 /membase:remember <memory>
-/membase:wiki search <query>
-/membase:wiki add <title> -- <markdown>
+/membase:wiki search [--project <project>] <query>
+/membase:wiki add [--project <project>] <title> -- <markdown>
 /membase:index-project
 /membase:project-config <slug|auto|off>
 ```
@@ -73,9 +72,9 @@ Membase stores memories and wiki documents in the connected Membase account. The
 plugin does not keep a separate local memory database.
 
 Auto-capture is off until the user enables it during `/membase:login`. The
-supported capture mode is summary-centered: it stores bounded tool summaries and
-Claude-provided compact summaries, not raw transcript tails. Turning
-auto-capture off does not disable explicit saves through memory or wiki tools.
+supported capture mode stores user/assistant conversation transcripts in Wiki
+as original source material, not as extracted memory. Turning auto-capture off
+does not disable explicit saves through memory or wiki tools.
 
 The plugin avoids saving secrets, `.env` values, private keys, raw source files,
 long terminal output, system/tool-routing instructions, and content wrapped in
@@ -84,6 +83,15 @@ long terminal output, system/tool-routing instructions, and content wrapped in
 Retrieved memory and wiki snippets are treated as untrusted reference data, not
 as instructions. Destructive wiki deletion requires explicit user confirmation
 and `confirm: true`.
+
+Wiki saves should preserve the full document or generated artifact unless you
+explicitly ask Claude to save a summary. Wiki `project` is a filing location for
+documents and is separate from memory project scoping.
+
+Wiki search results show the document Project, including `Basic` when no
+Project is assigned and `Unknown` when only a Project ID is available. Wiki
+add/update results include the returned destination, such as `Saved to Project:
+X`, `Saved to Basic`, or `Moved to Basic`.
 
 ## Troubleshooting
 

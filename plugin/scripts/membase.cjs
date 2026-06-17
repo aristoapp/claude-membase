@@ -8,11 +8,13 @@ var import_node_path4 = require("node:path");
 var import_promises = require("node:readline/promises");
 
 // src/constants.ts
-var PLUGIN_VERSION = "0.1.4";
+var PLUGIN_NAME = "claude-membase";
+var PLUGIN_VERSION = "0.2.0";
 var DEFAULT_API_URL = "https://api.membase.so";
 var DEFAULT_MCP_URL = "https://mcp.membase.so/mcp";
 var MEMORY_SOURCE = "claude-code";
 var USER_AGENT = `membase-claude-code/${PLUGIN_VERSION}`;
+var DEFAULT_API_TIMEOUT_MS = 18e4;
 var DEFAULT_MAX_RECALL_CHARS = 4e3;
 var MAX_RECALL_CHARS = 16e3;
 var MIN_RECALL_CHARS = 500;
@@ -27,6 +29,28 @@ var MembaseApiError = class extends Error {
   }
 };
 
+// src/wiki-project.ts
+function normalizeProjectValue(value) {
+  if (value === void 0) return void 0;
+  if (value === null) return null;
+  const trimmed = value.trim();
+  return trimmed === "" ? void 0 : trimmed;
+}
+function resolveWikiProjectInput(args) {
+  const project = normalizeProjectValue(args.project);
+  const collection = normalizeProjectValue(args.collection);
+  if (project === void 0 && collection === void 0) return {};
+  if (project !== void 0 && collection !== void 0) {
+    if (project !== collection) {
+      return {
+        error: "project and legacy collection must match when both are provided"
+      };
+    }
+    return { value: project };
+  }
+  return { value: project !== void 0 ? project : collection };
+}
+
 // src/api/client.ts
 var MembaseClient = class {
   tokens;
@@ -37,7 +61,7 @@ var MembaseClient = class {
   constructor(options) {
     this.apiUrl = options.apiUrl.replace(/\/$/, "");
     this.tokens = options.tokens;
-    this.timeoutMs = options.timeoutMs ?? 15e3;
+    this.timeoutMs = options.timeoutMs ?? DEFAULT_API_TIMEOUT_MS;
     this.onTokenRefresh = options.onTokenRefresh;
   }
   async doRefresh() {
@@ -151,37 +175,58 @@ var MembaseClient = class {
     return this.searchMemory({ query: "", limit });
   }
   async searchWiki(args) {
+    const projectInput = resolveWikiProjectInput(args);
+    if (projectInput.error) {
+      throw new MembaseApiError(projectInput.error, 400);
+    }
     const params = new URLSearchParams({
       query: args.query,
       limit: String(args.limit ?? 10)
     });
-    if (args.collection) params.set("collection", args.collection);
+    if (projectInput.value) params.set("project", projectInput.value);
     const data = await this.request(
       `/wiki/search?${params.toString()}`
     );
     return data.documents ?? [];
   }
   async addWiki(args) {
+    const projectInput = resolveWikiProjectInput(args);
+    if (projectInput.error) {
+      throw new MembaseApiError(projectInput.error, 400);
+    }
     return this.request("/wiki/documents", {
       method: "POST",
       body: JSON.stringify({
         title: args.title,
         content: args.content,
-        collection: args.collection,
-        summarize: args.summarize ?? false,
-        source: MEMORY_SOURCE
+        source: MEMORY_SOURCE,
+        source_metadata: {
+          ...args.source_metadata ?? {},
+          plugin_name: PLUGIN_NAME,
+          plugin_version: PLUGIN_VERSION,
+          host: "claude-code"
+        },
+        project: projectInput.value ?? void 0
       })
     });
   }
   async updateWiki(args) {
+    const projectInput = resolveWikiProjectInput(args);
+    if (projectInput.error) {
+      throw new MembaseApiError(projectInput.error, 400);
+    }
     return this.request(`/wiki/documents/${args.doc_id}`, {
       method: "PUT",
       body: JSON.stringify({
         title: args.title,
         content: args.content,
-        collection: args.collection
+        collection_id: projectInput.value === null ? null : void 0,
+        project: projectInput.value !== void 0 && projectInput.value !== null ? projectInput.value : void 0
       })
     });
+  }
+  async getKnownWikiProjects() {
+    return this.request("/wiki/collections/known");
   }
   async deleteWiki(docId) {
     await this.request(`/wiki/documents/${docId}`, { method: "DELETE" });
@@ -451,7 +496,8 @@ function numberFromOption(name) {
   return Number.isFinite(parsed) ? parsed : void 0;
 }
 function normalizeCaptureMode(value) {
-  return value === "summary" ? "summary" : "off";
+  if (value === "wiki" || value === "summary") return "wiki";
+  return "off";
 }
 function normalizeProjectMode(value) {
   if (value === "manual" || value === "off") return value;
@@ -573,14 +619,110 @@ function formatBundle(bundle, index) {
   return [header, summary, facts ? `   related facts:
 ${facts}` : ""].filter(Boolean).join("\n");
 }
+function formatDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(0, 10);
+}
+function normalizeProjectName(value) {
+  return value?.trim() ?? "";
+}
+function formatSearchProjectName(collectionId, collectionName) {
+  return normalizeProjectName(collectionName) || (collectionId ? "Unknown" : "Basic");
+}
+function appendResultSentence(base, sentence) {
+  return sentence ? `${base}. ${sentence}` : base;
+}
+function formatSavedDestination(routing, collectionId, explicitProject) {
+  if (routing?.fallback) {
+    return "Saved to Basic because no confident Project was found.";
+  }
+  const routedProjectName = normalizeProjectName(routing?.collection_name);
+  if (routedProjectName) {
+    return `Saved to Project: ${routedProjectName}.`;
+  }
+  const explicitProjectName = normalizeProjectName(explicitProject);
+  if (explicitProjectName && collectionId) {
+    return `Saved to Project: ${explicitProjectName}.`;
+  }
+  if (!collectionId) {
+    return "Saved to Basic.";
+  }
+  return void 0;
+}
+function formatWikiCreateResult(doc, explicitProject) {
+  return appendResultSentence(
+    `Wiki document created: "${doc.title}" (ID: ${doc.id})`,
+    formatSavedDestination(doc.routing, doc.collection_id, explicitProject)
+  );
+}
+function formatSourceName(source) {
+  if (!source) return "Source";
+  return source.split(/[-_\s]+/).filter(Boolean).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+}
+function formatSourceReference(ref) {
+  const label = formatSourceName(ref.source);
+  const title = ref.title?.trim();
+  const base = ref.url ? `${title ? `${label} - ${title}` : label} (${ref.url})` : title ? `${label} - ${title}` : label;
+  if (ref.status && ref.status !== "active") {
+    return ref.warning ? `${base} [${ref.status}: ${ref.warning}]` : `${base} [${ref.status}]`;
+  }
+  return base;
+}
+var SOURCE_REFERENCE_PRIORITY = {
+  primary: 0,
+  updated: 1,
+  supporting: 2,
+  derived: 3
+};
+function formatSourceReferences(refs) {
+  const sortedRefs = [...refs ?? []].filter((ref) => ref?.source).sort(
+    (a, b) => (SOURCE_REFERENCE_PRIORITY[a.link_type] ?? 99) - (SOURCE_REFERENCE_PRIORITY[b.link_type] ?? 99)
+  );
+  const primary = sortedRefs[0];
+  if (!primary) return "";
+  const extraCount = sortedRefs.length - 1;
+  const suffix = extraCount > 0 ? `; +${extraCount} additional reference${extraCount === 1 ? "" : "s"}` : "";
+  return `Source: ${formatSourceReference(primary)}${suffix}`;
+}
+function formatWikiDocumentDetails(doc) {
+  const parts = [];
+  const sourceReferences = formatSourceReferences(doc.source_references);
+  if (sourceReferences) {
+    parts.push(sourceReferences);
+  } else if (doc.source) {
+    parts.push(`source: ${doc.source}`);
+  }
+  if (doc.source_status && doc.source_status !== "active") {
+    parts.push(`source_status: ${doc.source_status}`);
+  }
+  if (doc.source_warning) {
+    parts.push(`source_warning: ${doc.source_warning}`);
+  }
+  const sourceChecked = formatDate(doc.source_last_checked_at);
+  if (sourceChecked && doc.source_status && doc.source_status !== "active") {
+    parts.push(`source_checked: ${sourceChecked}`);
+  }
+  const created = formatDate(doc.created_at);
+  if (created) parts.push(`created: ${created}`);
+  const updated = formatDate(doc.updated_at);
+  if (updated) parts.push(`updated: ${updated}`);
+  return parts.join("; ");
+}
 function formatWikiDocument(doc, index) {
-  const score = typeof doc.similarity === "number" ? ` score=${doc.similarity.toFixed(3)}` : "";
-  const collection = doc.collection_name ? ` collection=${doc.collection_name}` : "";
+  const similarity = typeof doc.similarity === "number" ? ` [similarity: ${doc.similarity.toFixed(3)}]` : "";
+  const project = ` [Project: ${formatSearchProjectName(
+    doc.collection_id,
+    doc.collection_name
+  )}]`;
+  const details = formatWikiDocumentDetails(doc);
   return [
-    `${index + 1}. ${truncateText(doc.title, 180)}${score}${collection}`,
+    `${index + 1}. ${truncateText(doc.title, 180)}${project}${similarity}`,
     `   id: ${doc.id}`,
+    details ? `   ${details}` : "",
     `   ${truncateText(doc.content, 700)}`
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 // src/project/index.ts
@@ -625,6 +767,7 @@ var import_node_path3 = require("node:path");
 var LOCK_STALE_MS = 3e4;
 var LOCK_WAIT_MS = 2e3;
 var INFLIGHT_STALE_MS = 6e4;
+var MAX_WIKI_CAPTURE_CHARS = 95e3;
 var SLEEP_BUFFER = new SharedArrayBuffer(4);
 var SLEEP_VIEW = new Int32Array(SLEEP_BUFFER);
 function spoolDir() {
@@ -687,6 +830,47 @@ function withSpoolLock(callback, timeoutMs = LOCK_WAIT_MS) {
   } finally {
     release();
   }
+}
+function splitContent(content) {
+  if (content.length <= MAX_WIKI_CAPTURE_CHARS) return [content];
+  const chunks = [];
+  let current = [];
+  let currentSize = 0;
+  const pushCurrent = () => {
+    if (current.length === 0) return;
+    chunks.push(current.join("\n\n").trim());
+    current = [];
+    currentSize = 0;
+  };
+  for (const block of content.split("\n\n")) {
+    if (block.length > MAX_WIKI_CAPTURE_CHARS) {
+      let remainder = block;
+      if (current.length > 0) {
+        const remainingSpace = MAX_WIKI_CAPTURE_CHARS - currentSize - 2;
+        const prefix = remainingSpace > 0 ? block.slice(0, remainingSpace) : "";
+        if (prefix) {
+          current.push(prefix);
+          remainder = block.slice(prefix.length);
+        }
+        pushCurrent();
+      }
+      for (let start = 0; start < remainder.length; start += MAX_WIKI_CAPTURE_CHARS) {
+        chunks.push(remainder.slice(start, start + MAX_WIKI_CAPTURE_CHARS));
+      }
+    } else if (current.length > 0 && currentSize + 2 + block.length > MAX_WIKI_CAPTURE_CHARS) {
+      pushCurrent();
+      current = [block];
+      currentSize = block.length;
+    } else {
+      if (current.length > 0) {
+        currentSize += 2;
+      }
+      current.push(block);
+      currentSize += block.length;
+    }
+  }
+  pushCurrent();
+  return chunks.filter(Boolean);
 }
 function readRecordsFromPath(path) {
   if (!(0, import_node_fs3.existsSync)(path)) return [];
@@ -805,17 +989,26 @@ async function flushSpool(client, limit = 10) {
   const failed = [];
   let flushed = 0;
   for (const record of drained.batch) {
+    let sentPartCount = Math.max(0, record.sent_part_count ?? 0);
     try {
-      await client.ingestMemory({
-        content: record.content,
-        display_summary: record.display_summary,
-        project: record.project,
-        metadata: {
-          ...record.metadata,
-          capture_id: record.capture_id,
-          capture_kind: record.capture_kind
-        }
-      });
+      const chunks = splitContent(record.content);
+      sentPartCount = Math.min(sentPartCount, chunks.length);
+      for (const [index, content] of chunks.entries()) {
+        if (index < sentPartCount) continue;
+        const multiPart = chunks.length > 1;
+        await client.addWiki({
+          title: (record.title ?? "Claude Code conversation capture") + (multiPart ? ` part ${index + 1}` : ""),
+          content,
+          project: record.project,
+          source_metadata: {
+            ...record.metadata,
+            capture_kind: record.capture_kind,
+            part_index: index + 1,
+            part_total: chunks.length
+          }
+        });
+        sentPartCount = index + 1;
+      }
       withSpoolLock(() => {
         const sentIds = readSentIds();
         sentIds.add(record.capture_id);
@@ -826,6 +1019,7 @@ async function flushSpool(client, limit = 10) {
       failed.push({
         ...record,
         attempts: (record.attempts ?? 0) + 1,
+        sent_part_count: sentPartCount,
         last_error: error instanceof Error ? error.message : String(error)
       });
     }
@@ -849,9 +1043,9 @@ async function askCaptureConsent() {
   const rl = (0, import_promises.createInterface)({ input: process.stdin, output: process.stdout });
   try {
     const answer = await rl.question(
-      "Enable summary auto-capture for tool and compact summaries? [Y/n] "
+      "Enable Wiki auto-capture for user/assistant transcripts? [Y/n] "
     );
-    return /^n/i.test(answer.trim()) ? "off" : "summary";
+    return /^n/i.test(answer.trim()) ? "off" : "wiki";
   } finally {
     rl.close();
   }
@@ -865,8 +1059,8 @@ Usage:
   membase status
   membase recall <query>
   membase remember <text>
-  membase wiki search <query>
-  membase wiki add <title> -- <markdown>
+  membase wiki search [--project <project>] <query>
+  membase wiki add [--project <project>] <title> -- <markdown>
   membase index-project <summary>
   membase project-config <slug|off|auto>
 `);
@@ -918,6 +1112,18 @@ async function commandLogin() {
 async function commandStatus() {
   const config = loadConfig();
   const tokens = readTokens();
+  let pendingCaptures = pendingSpoolCount();
+  let flushedCaptures = 0;
+  if (tokens) {
+    const client = createClient(config.apiUrl, tokens, writeTokens);
+    const result = await flushSpool(client, 20).catch(() => ({
+      flushed: 0,
+      remaining: pendingSpoolCount()
+    }));
+    flushedCaptures = result.flushed;
+    pendingCaptures = result.remaining;
+    await client.recordUsage().catch(() => void 0);
+  }
   console.log(`Membase Claude Code Plugin ${PLUGIN_VERSION}`);
   console.log(`API: ${config.apiUrl}`);
   console.log(`Logged in: ${tokens ? "yes" : "no"}`);
@@ -925,7 +1131,10 @@ async function commandStatus() {
   console.log(`Auto-wiki-recall: ${config.autoWikiRecall}`);
   console.log(`Auto-capture: ${config.captureMode}`);
   console.log(`Session-start context: ${config.sessionStartContext}`);
-  console.log(`Pending capture spool: ${pendingSpoolCount()}`);
+  console.log(`Pending capture spool: ${pendingCaptures}`);
+  if (flushedCaptures > 0) {
+    console.log(`Flushed pending captures: ${flushedCaptures}`);
+  }
   console.log(
     `Project: ${resolveProjectSlug(process.cwd(), config) ?? "(none)"}`
   );
@@ -937,18 +1146,6 @@ async function commandStatus() {
     console.log(
       "Remove duplicate remote MCP configs if you see duplicate Membase tools in Claude Code."
     );
-  }
-  if (tokens) {
-    const client = createClient(config.apiUrl, tokens, writeTokens);
-    const result = await flushSpool(client, 20).catch((error) => ({
-      flushed: 0,
-      remaining: pendingSpoolCount(),
-      error
-    }));
-    if ("flushed" in result && result.flushed > 0) {
-      console.log(`Flushed pending captures: ${result.flushed}`);
-    }
-    await client.recordUsage().catch(() => void 0);
   }
 }
 async function commandRecall(query) {
@@ -986,7 +1183,6 @@ async function storeMemory(text, captureKind) {
       plugin: "claude-membase",
       plugin_version: PLUGIN_VERSION,
       capture_kind: captureKind,
-      cwd: process.cwd(),
       project_slug: project ?? null
     }
   });
@@ -999,11 +1195,16 @@ async function commandIndexProject(text) {
   await storeMemory(text, "project_index");
 }
 async function commandWiki(args) {
-  const { client } = await authedClient();
+  const { config, client } = await authedClient();
   const action = args[0];
+  const projectFlagIndex = args.indexOf("--project");
+  const project = projectFlagIndex >= 0 ? args[projectFlagIndex + 1] : void 0;
+  const rest = projectFlagIndex >= 0 ? args.filter(
+    (_, index) => index !== projectFlagIndex && index !== projectFlagIndex + 1
+  ) : args;
   if (action === "search") {
-    const query = args.slice(1).join(" ");
-    const docs = await client.searchWiki({ query, limit: 10 });
+    const query = rest.slice(1).join(" ");
+    const docs = await client.searchWiki({ query, limit: 10, project });
     for (const [index, doc] of docs.entries()) {
       console.log(formatWikiDocument(doc, index));
       console.log("");
@@ -1011,9 +1212,9 @@ async function commandWiki(args) {
     return;
   }
   if (action === "add") {
-    const separator = args.indexOf("--");
-    const title = separator > 1 ? args.slice(1, separator).join(" ") : args[1];
-    const content = separator > 1 ? args.slice(separator + 1).join(" ") : args.slice(2).join(" ");
+    const separator = rest.indexOf("--");
+    const title = separator > 1 ? rest.slice(1, separator).join(" ") : rest[1];
+    const content = separator > 1 ? rest.slice(separator + 1).join(" ") : rest.slice(2).join(" ");
     if (!title || !content)
       throw new Error("Usage: membase wiki add <title> -- <markdown>");
     if (looksSensitive(content)) {
@@ -1021,12 +1222,19 @@ async function commandWiki(args) {
         "Refusing to store wiki content that looks like a secret."
       );
     }
-    const doc = await client.addWiki({ title, content });
-    console.log(`Wiki document created: ${doc.title} (${doc.id})`);
+    const doc = await client.addWiki({
+      title,
+      content,
+      project,
+      source_metadata: {
+        project_slug: resolveProjectSlug(process.cwd(), config) ?? null
+      }
+    });
+    console.log(formatWikiCreateResult(doc, project));
     return;
   }
   throw new Error(
-    "Usage: membase wiki search <query> | membase wiki add <title> -- <markdown>"
+    "Usage: membase wiki search [--project <project>] <query> | membase wiki add [--project <project>] <title> -- <markdown>"
   );
 }
 function commandProjectConfig(value) {

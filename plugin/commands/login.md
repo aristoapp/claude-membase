@@ -4,9 +4,8 @@ description: Connect Claude Code to Membase with OAuth and choose auto-capture s
 
 Ask the user to choose an auto-capture mode before connecting:
 
-- `summary`: enable summary auto-capture for bounded tool summaries and Claude
-  compact summaries.
-- `off`: disable automatic summary capture. Explicit saves through memory and
+- `wiki`: enable Wiki auto-capture for user/assistant conversation transcripts.
+- `off`: disable automatic transcript capture. Explicit saves through memory and
   wiki tools still work.
 
 Then call the Membase MCP `login` tool with the chosen `capture_mode`.

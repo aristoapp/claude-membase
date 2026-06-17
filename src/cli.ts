@@ -12,7 +12,11 @@ import {
   writeTokens,
 } from "./config/index.js";
 import { DEFAULT_MCP_URL, PLUGIN_VERSION } from "./constants.js";
-import { formatBundle, formatWikiDocument } from "./format/index.js";
+import {
+  formatBundle,
+  formatWikiCreateResult,
+  formatWikiDocument,
+} from "./format/index.js";
 import { resolveProjectSlug } from "./project/index.js";
 import {
   looksSensitive,
@@ -21,13 +25,13 @@ import {
 } from "./sanitize/index.js";
 import { flushSpool, pendingSpoolCount } from "./spool/index.js";
 
-async function askCaptureConsent(): Promise<"off" | "summary"> {
+async function askCaptureConsent(): Promise<"off" | "wiki"> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
     const answer = await rl.question(
-      "Enable summary auto-capture for tool and compact summaries? [Y/n] ",
+      "Enable Wiki auto-capture for user/assistant transcripts? [Y/n] ",
     );
-    return /^n/i.test(answer.trim()) ? "off" : "summary";
+    return /^n/i.test(answer.trim()) ? "off" : "wiki";
   } finally {
     rl.close();
   }
@@ -42,8 +46,8 @@ Usage:
   membase status
   membase recall <query>
   membase remember <text>
-  membase wiki search <query>
-  membase wiki add <title> -- <markdown>
+  membase wiki search [--project <project>] <query>
+  membase wiki add [--project <project>] <title> -- <markdown>
   membase index-project <summary>
   membase project-config <slug|off|auto>
 `);
@@ -99,6 +103,19 @@ async function commandLogin(): Promise<void> {
 async function commandStatus(): Promise<void> {
   const config = loadConfig();
   const tokens = readTokens();
+  let pendingCaptures = pendingSpoolCount();
+  let flushedCaptures = 0;
+  if (tokens) {
+    const client = createClient(config.apiUrl, tokens, writeTokens);
+    const result = await flushSpool(client, 20).catch(() => ({
+      flushed: 0,
+      remaining: pendingSpoolCount(),
+    }));
+    flushedCaptures = result.flushed;
+    pendingCaptures = result.remaining;
+    await client.recordUsage().catch(() => undefined);
+  }
+
   console.log(`Membase Claude Code Plugin ${PLUGIN_VERSION}`);
   console.log(`API: ${config.apiUrl}`);
   console.log(`Logged in: ${tokens ? "yes" : "no"}`);
@@ -106,7 +123,10 @@ async function commandStatus(): Promise<void> {
   console.log(`Auto-wiki-recall: ${config.autoWikiRecall}`);
   console.log(`Auto-capture: ${config.captureMode}`);
   console.log(`Session-start context: ${config.sessionStartContext}`);
-  console.log(`Pending capture spool: ${pendingSpoolCount()}`);
+  console.log(`Pending capture spool: ${pendingCaptures}`);
+  if (flushedCaptures > 0) {
+    console.log(`Flushed pending captures: ${flushedCaptures}`);
+  }
   console.log(
     `Project: ${resolveProjectSlug(process.cwd(), config) ?? "(none)"}`,
   );
@@ -118,18 +138,6 @@ async function commandStatus(): Promise<void> {
     console.log(
       "Remove duplicate remote MCP configs if you see duplicate Membase tools in Claude Code.",
     );
-  }
-  if (tokens) {
-    const client = createClient(config.apiUrl, tokens, writeTokens);
-    const result = await flushSpool(client, 20).catch((error) => ({
-      flushed: 0,
-      remaining: pendingSpoolCount(),
-      error,
-    }));
-    if ("flushed" in result && result.flushed > 0) {
-      console.log(`Flushed pending captures: ${result.flushed}`);
-    }
-    await client.recordUsage().catch(() => undefined);
   }
 }
 
@@ -174,7 +182,6 @@ async function storeMemory(
       plugin: "claude-membase",
       plugin_version: PLUGIN_VERSION,
       capture_kind: captureKind,
-      cwd: process.cwd(),
       project_slug: project ?? null,
     },
   });
@@ -190,11 +197,21 @@ async function commandIndexProject(text: string): Promise<void> {
 }
 
 async function commandWiki(args: string[]): Promise<void> {
-  const { client } = await authedClient();
+  const { config, client } = await authedClient();
   const action = args[0];
+  const projectFlagIndex = args.indexOf("--project");
+  const project =
+    projectFlagIndex >= 0 ? args[projectFlagIndex + 1] : undefined;
+  const rest =
+    projectFlagIndex >= 0
+      ? args.filter(
+          (_, index) =>
+            index !== projectFlagIndex && index !== projectFlagIndex + 1,
+        )
+      : args;
   if (action === "search") {
-    const query = args.slice(1).join(" ");
-    const docs = await client.searchWiki({ query, limit: 10 });
+    const query = rest.slice(1).join(" ");
+    const docs = await client.searchWiki({ query, limit: 10, project });
     for (const [index, doc] of docs.entries()) {
       console.log(formatWikiDocument(doc, index));
       console.log("");
@@ -202,12 +219,12 @@ async function commandWiki(args: string[]): Promise<void> {
     return;
   }
   if (action === "add") {
-    const separator = args.indexOf("--");
-    const title = separator > 1 ? args.slice(1, separator).join(" ") : args[1];
+    const separator = rest.indexOf("--");
+    const title = separator > 1 ? rest.slice(1, separator).join(" ") : rest[1];
     const content =
       separator > 1
-        ? args.slice(separator + 1).join(" ")
-        : args.slice(2).join(" ");
+        ? rest.slice(separator + 1).join(" ")
+        : rest.slice(2).join(" ");
     if (!title || !content)
       throw new Error("Usage: membase wiki add <title> -- <markdown>");
     if (looksSensitive(content)) {
@@ -215,12 +232,19 @@ async function commandWiki(args: string[]): Promise<void> {
         "Refusing to store wiki content that looks like a secret.",
       );
     }
-    const doc = await client.addWiki({ title, content });
-    console.log(`Wiki document created: ${doc.title} (${doc.id})`);
+    const doc = await client.addWiki({
+      title,
+      content,
+      project,
+      source_metadata: {
+        project_slug: resolveProjectSlug(process.cwd(), config) ?? null,
+      },
+    });
+    console.log(formatWikiCreateResult(doc, project));
     return;
   }
   throw new Error(
-    "Usage: membase wiki search <query> | membase wiki add <title> -- <markdown>",
+    "Usage: membase wiki search [--project <project>] <query> | membase wiki add [--project <project>] <title> -- <markdown>",
   );
 }
 
